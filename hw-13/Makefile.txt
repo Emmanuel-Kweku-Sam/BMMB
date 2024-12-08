@@ -1,0 +1,55 @@
+SHELL := /bin/bash
+
+SHELL := /bin/bash
+
+# Variables
+SAMPLES := $(shell cut -d, -f1 design.csv | tail -n +2)
+GENOME_ACC := ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz
+GENOME := GCF_000005845.2_ASM584v2_genomic.fna
+GTF := ftp://ftp.ensembl.org/pub/release-110/gtf/homo_sapiens/Homo_sapiens.GRCh38.110.gtf.gz
+
+.PHONY: all genome download index quantification call_counts clean usage
+
+# Main workflow
+all: genome download index quantification call_counts
+
+# Usage information
+usage:
+	@echo "Usage:"
+	@echo "  make genome           - Download and prepare the reference genome"
+	@echo "  make download         - Download SRA reads"
+	@echo "  make index            - Index the genome"
+	@echo "  make quantification   - Quantify reads using Salmon"
+	@echo "  make call_counts      - Generate count matrix using featureCounts"
+	@echo "  make clean            - Remove intermediate files"
+
+# Download the genome and GTF annotation
+genome:
+	wget -N $(GENOME_ACC)
+	wget -N $(GTF)
+	gunzip -f $(GENOME).gz
+	gunzip -f Homo_sapiens.GRCh38.110.gtf.gz
+
+# Download FASTQ files from SRA
+download:
+	@echo "Downloading samples..."
+	echo "$(SAMPLES)" | parallel fastq-dump --split-files --gzip {}
+
+# Index the genome
+index: genome
+	mkdir -p salmon_index
+	salmon index -t $(GENOME) -i salmon_index --type quasi -k 31
+
+# Quantify reads for all samples
+quantification: index
+	@echo "Quantifying samples..."
+	echo "$(SAMPLES)" | parallel 'salmon quant -i salmon_index -l A -1 {}_1.fastq.gz -2 {}_2.fastq.gz -p 8 -o {}_quant'
+
+# Generate count matrix using featureCounts
+call_counts:
+	featureCounts -a Homo_sapiens.GRCh38.110.gtf -o gene_counts.txt -g gene_id -T 8 *.bam
+
+# Clean intermediate files
+clean:
+	rm -f *_1.fastq.gz *_2.fastq.gz *_quant -r
+	rm -f $(GENOME) Homo_sapiens.GRCh38.110.gtf
